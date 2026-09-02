@@ -1,0 +1,14 @@
+# Secrets — never commit
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Run artifacts (regenerated every run)
+logs/
+output_report.json
+output_report.csv

@@ -1,0 +1,114 @@
+# =============================================================================
+# Lead Intelligence System — configuration
+# -----------------------------------------------------------------------------
+# Everything tunable lives here so the code stays stable while the business
+# logic (weights, bands, batch size, prompts-adjacent knobs) can be adjusted
+# without touching Python. Mirrors `lead_qualification_rubric_spec.md`.
+# =============================================================================
+
+# ---- Runtime -----------------------------------------------------------------
+# How "days since last interaction" is measured. The sample datasets are
+# historical (2022-2024), so wall-clock scoring would mark every lead stale.
+#   auto        -> max(last_interaction_date in the batch) + 1 day
+#   today       -> today's real date
+#   YYYY-MM-DD  -> a fixed date (use this for reproducible report generation)
+evaluation_date: auto
+
+paths:
+  output_report: output_report.json
+  output_csv: output_report.csv
+  run_log: logs/run.log
+  batch_log: logs/batches.jsonl
+
+# ---- LLM -------------------------------------------------------------------- -
+llm:
+  provider: groq
+  model: llama-3.3-70b-versatile
+  batch_size: 15              # leads per API call (never one call per lead)
+  temperature: 0.3            # low: we want consistent judgement, not variety
+  max_retries: 3
+  backoff_seconds: [1, 2, 4]  # sleep between retry attempts
+  request_timeout_seconds: 60
+  offline: false              # true -> deterministic mock, zero API calls
+
+# ---- Rubric (see lead_qualification_rubric_spec.md) -------------------------
+rubric:
+  # §5 score combination weights
+  weights:
+    fit_size: 0.7            # size vs industry, within Fit Score
+    fit_industry: 0.3
+    final_fit: 0.55          # Fit vs Intent, within Final Score
+    final_intent: 0.45
+
+  # §6 decision bands, applied to final_score
+  decision_bands:
+    qualified_min: 7.5        # score >= this           -> qualified
+    rejected_below: 5.0       # score <  this           -> rejected
+    #                          otherwise                -> review
+
+  # §4 neutral/conservative defaults when a field is missing
+  missing_defaults:
+    company_size: 5
+    industry: 6
+    source: 4
+    recency_multiplier: 0.5
+
+  # §4.1 forced-review overrides
+  forced_review:
+    on_company_size_missing: true
+    lighter_fields_missing_threshold: 2   # >=N of {industry, source, date} missing
+
+  # §3.1 company size -> score. First band whose `max` (inclusive) the size
+  # falls under wins; `max: null` is the catch-all top band.
+  size_bands:
+    - {max: 9,     score: 1}
+    - {max: 19,    score: 3}
+    - {max: 200,   score: 10}
+    - {max: 1000,  score: 8}
+    - {max: 3000,  score: 5}
+    - {max: 10000, score: 3}
+    - {max: null,  score: 1}
+
+  # §3.2 industry -> score (case-insensitive match). A real value that is not
+  # in any list is "unrecognized" -> `unlisted_score`, no data-quality flag.
+  industry_tiers:
+    strong:
+      score: 10
+      values: [saas, software, tech, technology, marketing, analytics,
+               cybersecurity, edtech, fintech]
+    neutral:
+      score: 6
+      values: [retail, manufacturing, logistics, hospitality, travel, media,
+               events, consulting, energy, supply chain, real estate,
+               agriculture, education]
+    weak:
+      score: 3
+      values: [government, legal, finance, insurance, healthcare,
+               pharmaceuticals, pharma]
+    unlisted_score: 6
+
+  # §3.3 source -> score (case-insensitive match).
+  source_scores:
+    referral: 10
+    inbound demo request: 10
+    sales call: 8
+    webinar attendee: 6
+    content download: 4
+    linkedin outreach: 3
+    unlisted_score: 4
+
+  # §3.4 recency decay: first band whose `max_days` (inclusive) the age falls
+  # under wins; `max_days: null` is the catch-all oldest band.
+  recency_bands:
+    - {max_days: 30,   multiplier: 1.0}
+    - {max_days: 90,   multiplier: 0.75}
+    - {max_days: 180,  multiplier: 0.5}
+    - {max_days: 365,  multiplier: 0.3}
+    - {max_days: null, multiplier: 0.15}
+
+# ---- Missing-data detection ------------------------------------------------
+# A cell is "missing" if, after trim+lowercase, it is empty or any of its
+# whitespace-separated words is one of these tokens. So "Unknown Sector"
+# and "Unknown Source" count as missing; "Enterprise Software" does not.
+missing_tokens: [na, "n/a", none, null, nil, unknown, unmapped, unspecified,
+                 tbd, "-", "--"]
